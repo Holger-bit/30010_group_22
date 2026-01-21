@@ -12,38 +12,53 @@
 #include "projectiles.h"
 #include "enemy.h"
 
-// --- GLOBALE VARIABLER ---
-static Entity player = {47, 40, 6, 6, 0};
-static bullet_t bullets[MAX_PROJECTILES];
-static uint8_t next_bullet_idx = 0;
-
-volatile uint8_t game_tick = 0;
 uint16_t score = 0;
 
-// Callback fra Timer 15
-void spil_timer_callback(void) {
-    game_tick = 1;
-}
-
-typedef enum {
-    STATE_MENU,
-    STATE_PLAYING,
-    STATE_HELP
-} State;
-
 void run_game_manager(void) {
+
+
+	//Declarations and initialization
+	uint8_t start = 0;
+
+	Entity player = {47, 40, 6, 6, 0};
+    Asteroid rocky = {2, 15, 1};
+	bullet_t bullets[MAX_PROJECTILES];
+	uint8_t next_bullet_idx = 0;
     State currentState = STATE_MENU;
     uint8_t selected = 0;
+    char hearts[4];
+    char Bombs[4];
+
     char input;
 
-    // --- HARDWARE INIT (Kører kun én gang) ---
+    // TÆLLERE (Baseret på 10ms ticks)
+    uint32_t skud_taeller;
+    uint32_t sten_taeller;
+	uint32_t lcd_taeller;
+
+    uint8_t powerup_ready;
+    uint8_t powerup_active;
+    uint8_t timer_offset;
+
+    //BOMB VARIABLE
+    char bombtimer_str[4]; // 3 tegn + escape
+	uint8_t bombtimer_active;
+	uint8_t bombtimer_offset;
+	uint8_t bombtimer_len;
+	int bombs_left; //antal bomber tilbage (til affyring)
+    uint32_t cooldown;
+
+    // hardware
     setupjoystick();
     setupLed();
     setLed(COLOUR_BLACK);
     lcd_init();
-    timer15_init();
-    timer15_setCallback(spil_timer_callback);
 
+    char timer_str[11];
+    uint8_t buffer[512]= {};
+    Bomb bombs[MAX_BOMBS] = {0};
+
+    // lav menuen når man starter programmet
     maketitle();
     make_menu(selected);
 
@@ -51,7 +66,8 @@ void run_game_manager(void) {
         input = uart_get_char();
 
         switch (currentState) {
-            case STATE_MENU:
+
+        	case STATE_MENU:
                 if (input != 0) {
                     if (input == 'w') { selected = 0; make_menu(selected); }
                     else if (input == 's') { selected = 1; make_menu(selected); }
@@ -68,63 +84,43 @@ void run_game_manager(void) {
 
             case STATE_PLAYING:
             {
-                static uint8_t start = 0;
-
-                static char hearts[] = "123";
-                static char Bombs[] = "123"; // *****//laver en string som kan aendres
-                static uint8_t buffer[512];
-                static Bomb bombs[MAX_BOMBS] = {0};
-
-                // TÆLLERE (Baseret på 10ms ticks)
-                static uint32_t skud_taeller = 0;
-                static uint32_t sten_taeller = 0;
-                static uint32_t lcd_taeller = 0;
-
-                // POWERUP VARIABLE
-                static uint8_t powerup_ready = 0;
-                static uint8_t powerup_active = 0;
-                static uint8_t timer_offset = 0;
-                static char timer_str[] = "01234567890123456789";
-                static uint8_t powerup_timer_offset = 0;
-                static const uint8_t timer_len = (uint8_t)(sizeof(timer_str) - 1);
-
-                //BOMB VARIABLE
-                static char bombtimer_str[] = "012"; // *****// 3 tegn
-				static uint8_t bombtimer_active = 0;
-				static uint8_t bombtimer_offset = 0;
-				static const uint8_t bombtimer_len = (uint8_t)(sizeof(bombtimer_str) - 1);
-				static uint8_t bomb_timer_offset = 0;
-				static int bombs_left = 3; //antal bomber tilbage (til affyring)
-				static uint32_t last_bomb_time = (uint32_t)(-4000); // soerger for jeg kan skyde i starten
-
-				static uint32_t last_lcd_ms = 0;// *****
-					uint32_t now = sys_millis();// *****
-
-
-
-
                 // --- RESET VED HVER SPIL-START ---
                 if (start == 0) {
                     player.x = 47; player.y = 40; player.tilt = 0;
                     score = 0;
-                    strcpy(hearts, "123");
+
+
                     skud_taeller = 0; sten_taeller = 0; lcd_taeller = 0;
                     powerup_ready = 0; powerup_active = 0; timer_offset = 0;
                     init_enemies_session();
                     clrscr();
                     window(1, 1, 100, 50, " SPACE HAM ", 0);
-                    // (drawPortal er fjernet herfra)
                     bullets_init(bullets, &next_bullet_idx);
                     makeplayer(&player, 0);
                     start = 1;
-                    hearts[0] = '1'; hearts[1] = '2'; hearts[2] = '3'; hearts[3] = '\0';//*****
-					Bombs[0]  = '1'; Bombs[1]  = '2'; Bombs[2]  = '3'; Bombs[3]  = '\0';//*****
+
+                    strcpy(hearts, "123");
+                    hearts[0] = '1'; hearts[1] = '2'; hearts[2] = '3'; hearts[3] = '\0';
+
+                    strcpy(Bombs, "123");
+					//Bombs[0]  = '1'; Bombs[1]  = '2'; Bombs[2]  = '3'; Bombs[3]  = '\0';
+
+	                //BOMB VARIABLE
+					strcpy(bombtimer_str, "123");
+					//bombtimer_str[0]= '1';bombtimer_str[0]= '2';bombtimer_str[0]= '3';bombtimer_str[0]= '\0';
+					bombtimer_active = 0;
+					bombtimer_offset = 0;
+					bombtimer_len = (uint8_t)(sizeof(bombtimer_str) - 1);
+					bombs_left = 3; //antal bomber tilbage (til affyring)
+					strcpy(timer_str, "0123456789");
+
+
 
                 }
 
                 // --- MOTOR (100 Hz) ---
-                if (game_tick == 1) {
-                    game_tick = 0;
+                if (gtimerIRQFLAG == 1) {
+                	gtimerIRQFLAG = 0;
 
                     uint8_t joy = readJoystick();
                     int8_t old_tilt = player.tilt;
@@ -158,10 +154,6 @@ void run_game_manager(void) {
                         break;  // vigtigt: hop ud af STATE_PLAYING i din switch
                     }
 
-
-
-
-
                     // 2. Powerup system
                     if (input == 'r' || input == 'R') {
                         powerup_ready = 1;
@@ -173,13 +165,6 @@ void run_game_manager(void) {
                         timer_offset = 0;
                         setLed(COLOUR_PINK);
                     }
-
-
-
-
-
-
-
 
                     if ((input == 'q' || input == 'Q') &&
                         bombs_left > 0 &&
@@ -206,17 +191,6 @@ void run_game_manager(void) {
                     }
 
 
-
-
-
-
-
-
-
-
-
-
-
                     // 3. Navigation
                     if (joy == 4) player.tilt = -2;
                     else if (joy == 5) player.tilt = -1;
@@ -228,21 +202,34 @@ void run_game_manager(void) {
                     if (input == 'd' && player.x < (99 - player.w)) player.x += 2;
 
                     // 4. Skydning
+
+
+                    if (powerup_active == 1) {
+                        cooldown = 10;  // Hvis powerup er aktiv, skal vi kun vente 10 ticks (skyder hurtigt)
+                    } else {
+                        cooldown = 30;  // Ellers skal vi vente 30 ticks (skyder langsomt)
+                    }
+
                     skud_taeller++;
-                    uint32_t cooldown = powerup_active ? 10 : 30;
                     if (skud_taeller >= cooldown) {
                         shoot(bullets, &next_bullet_idx, player.x + 3, player.y - 1, player.tilt, -1);
                         skud_taeller = 0;
                     }
 
                     // 5. Asterolde og Skud
-                    updateProjectiles(bullets);
+                    updateProjectiles(bullets,&rocky);
                     updateBombs(bombs, bullets);
 
                     sten_taeller++;
-                    if (sten_taeller >= 3) {
+
+                    if (sten_taeller >= 15) {
+                        // Hver 15. gang flytter vi den
                         updateAsteroid(&rocky);
                         sten_taeller = 0;
+                    } else {
+                        // Alle de andre gange tegner vi den bare (uden at flytte/slette)
+                        // Det fixer de huller som skuddene laver, uden at det flimrer
+                        drawAsteroid(&rocky);
                     }
 
                     // 6. Raket
@@ -270,7 +257,7 @@ void run_game_manager(void) {
 						if (powerup_ready) lcd_write_powerup(buffer, "1", 385);
 
 						if (powerup_active) {
-							lcd_write_timer(buffer, timer_str, 451, timer_offset);
+							lcd_draw_timer(buffer, timer_str, 451, timer_offset);
 							if (timer_offset < 19) timer_offset++;
 							else {
 								powerup_active = 0;
@@ -281,7 +268,7 @@ void run_game_manager(void) {
 
 						if (bombtimer_active)
 						{
-							lcd_write_timer_omvendt(buffer, bombtimer_str, 179, bombtimer_offset);
+							lcd_draw_timer_omvendt(buffer, bombtimer_str, 179, bombtimer_offset);
 
 							if (bombtimer_offset < bombtimer_len)
 							{
@@ -293,16 +280,9 @@ void run_game_manager(void) {
 							}
 						}
 
-
-
-
-
 						lcd_push_buffer(buffer);
 						lcd_taeller = 0;
 					}
-
-
-
 
                     // 8. Tilbage til menu
                     if (input == 'b') {
@@ -312,10 +292,6 @@ void run_game_manager(void) {
                         currentState = STATE_MENU;
                         clrscr(); maketitle(); make_menu(0);
 
-
-                        powerup_timer_offset = 0; // ***** //resetter timer til power-up
-					    bomb_timer_offset = 0; // ***** //resetter timer til bomb
-						last_bomb_time = (uint32_t)(-4000);
 
 						bombtimer_active = 0;
 						bombs_left = 3; // resetter antal bomber
@@ -330,15 +306,6 @@ void run_game_manager(void) {
 						powerup_ready = 0;
 						powerup_active = 0;
 
-
-
-
-
-
-
-
-
-
                         break;
                     }
                 }
@@ -346,9 +313,6 @@ void run_game_manager(void) {
             break;
 
             case STATE_HELP:
-
-
-
                         	gotoxy(10,9);
                             printf("CONTROLS");
                         	gotoxy(10,10);
@@ -363,8 +327,6 @@ void run_game_manager(void) {
                             printf("MOVE JOYSTICK TO AIM AND CENTER TO POWER UP");
                             gotoxy(10,15);
                             printf("GOOD LUCK!");
-
-
 
 
                             gotoxy(10,18);
